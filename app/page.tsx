@@ -13,6 +13,7 @@ export default function Home() {
   const [dailyAds, setDailyAds] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [showWallet, setShowWallet] = useState<boolean>(false); 
+  const [checkoutLoadingProduct, setCheckoutLoadingProduct] = useState<string | null>(null);
 
   // ----------------------------------------------------
   // 2. トレード登録フォームステート
@@ -393,22 +394,44 @@ export default function Home() {
     }, 5000);
   };
 
-  const handleChargeCoins = async (amount: number, coinsGranted: number) => {
-    if (!window.confirm(`【決済確認】${amount}円でコイン${coinsGranted}枚を購入しますか？`)) return;
-    const nextCoins = userCoins + coinsGranted;
-    await supabase.from('users').update({ coins: nextCoins }).eq('line_id', profile.userId);
-    setUserCoins(nextCoins);
-    alert('コインの購入が完了しました！');
+  type CheckoutProduct = 'premium' | 'coin10' | 'coin35' | 'coin60';
+
+  const startStripeCheckout = async (product: CheckoutProduct, confirmMessage: string) => {
+    if (!profile?.userId) {
+      alert('LINEログイン情報を取得できませんでした。再読み込みしてください。');
+      return;
+    }
+
+    if (!window.confirm(confirmMessage)) return;
+
+    setCheckoutLoadingProduct(product);
+    try {
+      const response = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product, userId: profile.userId }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || 'Stripe Checkoutの開始に失敗しました。');
+      }
+
+      window.location.href = data.url;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Stripe Checkoutの開始に失敗しました。';
+      alert(message);
+      setCheckoutLoadingProduct(null);
+    }
+  };
+
+  const handleChargeCoins = async (product: Exclude<CheckoutProduct, 'premium'>, coinsGranted: number) => {
+    await startStripeCheckout(product, `【決済確認】コイン${coinsGranted}枚をStripe決済で購入しますか？`);
   };
 
   const handleBuyPremium = async () => {
-    const details = `💎 【プレミアム会員プラン特典のご確認】\n\n有効化すると以下の機能が即座に解放されます：\n\n1. 🔓 【3方巡回自動マッチング】機能が全自動で解放！\n2. 👥 3人閉鎖ループの【匿名3方チャットルーム】への入場権限を獲得！\n3. 📊 複数の2方・3方マッチ結果の【同時マルチ表示】に対応！\n4. 🎁 【購入特典アイテム】トレード固定用コインを50枚プレゼント！\n\n上記の内容で永久プレミアム会員（980円）に登録しますか？`;
-    if (!window.confirm(details)) return;
-    await supabase.from('users').update({ is_premium: true, coins: userCoins + 50 }).eq('line_id', profile.userId);
-    setIsPremium(true); 
-    setUserCoins(userCoins + 50);
-    alert('プレミアム特典が有効化されました！');
-    fetchItems(profile.userId, false);
+    const details = `💎 【プレミアム会員プラン特典のご確認】\n\n有効化すると以下の機能が解放されます：\n\n1. 🔓 【3方巡回自動マッチング】機能が解放！\n2. 👥 3人閉鎖ループの【匿名3方チャットルーム】への入場権限を獲得！\n3. 📊 複数の2方・3方マッチ結果の【同時マルチ表示】に対応！\n4. 🎁 【購入特典アイテム】トレード固定用コインを50枚プレゼント！\n\n上記の内容で永久プレミアム会員にStripe決済で登録しますか？`;
+    await startStripeCheckout('premium', details);
   };
 
   const handleSubmitPost = async (e: React.FormEvent) => {
@@ -568,15 +591,15 @@ export default function Home() {
               <p className="text-xl font-black text-amber-950">{userCoins} <span className="text-xs font-bold">枚</span></p>
             </div>
             {!isPremium && (
-              <button onClick={handleBuyPremium} className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-[10px] font-black px-3 py-2 rounded-xl shadow-md">
-                👑 980円で永久プレミアム登録
+              <button onClick={handleBuyPremium} disabled={checkoutLoadingProduct !== null} className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-[10px] font-black px-3 py-2 rounded-xl shadow-md disabled:opacity-60">
+                {checkoutLoadingProduct === 'premium' ? 'Stripeへ移動中...' : '👑 980円で永久プレミアム登録'}
               </button>
             )}
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <button onClick={() => handleChargeCoins(300, 10)} className="bg-white border rounded-xl p-2 text-center text-xs font-bold">10枚/¥300</button>
-            <button onClick={() => handleChargeCoins(500, 22)} className="bg-white border-2 border-teal-500 rounded-xl p-2 text-center text-xs font-bold text-teal-600">22枚/¥500</button>
-            <button onClick={() => handleChargeCoins(1000, 50)} className="bg-white border rounded-xl p-2 text-center text-xs font-bold">50枚/¥1,000</button>
+            <button onClick={() => handleChargeCoins('coin10', 10)} disabled={checkoutLoadingProduct !== null} className="bg-white border rounded-xl p-2 text-center text-xs font-bold disabled:opacity-60">10枚</button>
+            <button onClick={() => handleChargeCoins('coin35', 35)} disabled={checkoutLoadingProduct !== null} className="bg-white border-2 border-teal-500 rounded-xl p-2 text-center text-xs font-bold text-teal-600 disabled:opacity-60">35枚</button>
+            <button onClick={() => handleChargeCoins('coin60', 60)} disabled={checkoutLoadingProduct !== null} className="bg-white border rounded-xl p-2 text-center text-xs font-bold disabled:opacity-60">60枚</button>
           </div>
           <button onClick={handleWatchAd} disabled={dailyAds >= 3} className="w-full bg-slate-900 text-white p-2 text-center rounded-xl text-[10px] font-bold">
             📺 動画広告視聴で1枚無料獲得 (本日残り: {3 - dailyAds}回)
