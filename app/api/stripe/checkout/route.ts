@@ -29,10 +29,24 @@ export async function POST(request: Request) {
 
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-    const priceId = process.env[priceEnvByProduct[product]];
+    const priceEnvName = priceEnvByProduct[product];
+    const priceId = process.env[priceEnvName];
+    const missing: string[] = [];
 
-    if (!stripeSecretKey || !appUrl || !priceId) {
-      return NextResponse.json({ error: 'Stripe checkout is not configured.' }, { status: 500 });
+    if (!stripeSecretKey) {
+      missing.push('STRIPE_SECRET_KEY');
+    }
+
+    if (!appUrl) {
+      missing.push('NEXT_PUBLIC_APP_URL');
+    }
+
+    if (!priceId) {
+      missing.push(priceEnvName);
+    }
+
+    if (missing.length > 0 || !stripeSecretKey || !appUrl || !priceId) {
+      return NextResponse.json({ error: 'Stripe checkout is not configured.', missing }, { status: 500 });
     }
 
     const params = new URLSearchParams({
