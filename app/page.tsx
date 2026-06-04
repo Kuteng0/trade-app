@@ -3,6 +3,26 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
+type TradeItemSummary = {
+  id?: string;
+  user_id?: string;
+  image_url?: string | null;
+  pinned_until?: string | null;
+  give_details?: string;
+  want_details?: string;
+  users?: { display_name?: string | null } | null;
+};
+
+type ThreeWayRoute = {
+  itemA: TradeItemSummary;
+  itemB: TradeItemSummary;
+  itemC: TradeItemSummary;
+};
+
+type ChatRoomWithRoute = {
+  currentRoute?: ThreeWayRoute;
+};
+
 export default function Home() {
   // ----------------------------------------------------
   // 1. ユーザー・ウォレット・プランステート
@@ -13,6 +33,7 @@ export default function Home() {
   const [dailyAds, setDailyAds] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [showWallet, setShowWallet] = useState<boolean>(false); 
+  const [checkoutLoadingProduct, setCheckoutLoadingProduct] = useState<string | null>(null);
 
   // ----------------------------------------------------
   // 2. トレード登録フォームステート
@@ -53,6 +74,62 @@ export default function Home() {
   const [twoWayMatches, setTwoWayMatches] = useState<any[]>([]);
   const [threeWayMatches, setThreeWayMatches] = useState<any[]>([]);
   const [roomExtraMap, setRoomExtraMap] = useState<Record<string, { lastTime: string; id: string }>>({});
+
+
+  const premiumBenefits = [
+    'AI 3方巡回マッチング無制限',
+    '3人専用チャットルーム利用',
+    '交換情報の優先表示',
+    '匿名安全取引室（画像アップロード対応）',
+    '交換予約',
+    '条件自動追跡通知',
+    'LINE通知',
+    'プレミアム限定機能の先行利用',
+    '今後追加される特典への優先アクセス',
+  ];
+
+  const plannedPremiumFeatures = [
+    '匿名安全取引室（画像アップロード対応）',
+    '交換予約',
+    '条件自動追跡通知',
+    'LINE通知',
+  ];
+
+  const pinOptions = [
+    { value: 0, label: '固定なし（1枚）', hours: 0, cost: 1 },
+    { value: 24, label: '24時間置トップ（5枚）', hours: 24, cost: 5 },
+    { value: 48, label: '48時間置トップ（8枚）', hours: 48, cost: 8 },
+    { value: 72, label: '72時間置トップ（10枚）', hours: 72, cost: 10 },
+  ];
+
+  const pinExtensionOptions = [
+    { hours: 24, label: '24時間延長（5枚）', cost: 5 },
+    { hours: 48, label: '48時間延長（8枚）', cost: 8 },
+    { hours: 72, label: '72時間延長（10枚）', cost: 10 },
+  ];
+
+  const getSupabaseStoragePath = (imageUrl: string | null | undefined) => {
+    if (!imageUrl) return null;
+    const marker = '/item-images/';
+    const markerIndex = imageUrl.indexOf(marker);
+    if (markerIndex === -1) return null;
+    return decodeURIComponent(imageUrl.slice(markerIndex + marker.length).split('?')[0]);
+  };
+
+  const getDisplayName = (item: TradeItemSummary, fallback: string) => item.users?.display_name || fallback;
+
+  const getThreeWayRouteLines = (room: ChatRoomWithRoute | null) => {
+    const route = room?.currentRoute;
+    if (!route?.itemA || !route?.itemB || !route?.itemC) return [];
+    const nameA = getDisplayName(route.itemA, 'ユーザー1');
+    const nameB = getDisplayName(route.itemB, 'ユーザー2');
+    const nameC = getDisplayName(route.itemC, 'ユーザー3');
+    return [
+      `${nameA}さんの「${route.itemA.give_details}」→ ${nameB}さんへ`,
+      `${nameB}さんの「${route.itemB.give_details}」→ ${nameC}さんへ`,
+      `${nameC}さんの「${route.itemC.give_details}」→ ${nameA}さんへ`,
+    ];
+  };
 
   // 相対時間計算ヘルパー
   const formatJapaneseTime = (dateString: string | null | undefined) => {
@@ -267,7 +344,7 @@ export default function Home() {
   // ----------------------------------------------------
   // チャットアクション
   // ----------------------------------------------------
-  const handleOpenChat = async (targetItem: any, fingerprint: string, participants: string[]) => {
+  const handleOpenChat = async (targetItem: any, fingerprint: string, participants: string[], currentRoute?: ThreeWayRoute) => {
     let { data: room } = await supabase
       .from('anonymous_chats')
       .select('*')
@@ -290,7 +367,7 @@ export default function Home() {
     }
 
     if (room) {
-      setActiveChatRoom({ ...room, currentTargetItem: targetItem });
+      setActiveChatRoom({ ...room, currentTargetItem: targetItem, currentRoute });
       setChatMessages(room.messages || []);
     }
   };
@@ -360,7 +437,7 @@ export default function Home() {
       if (partnerId) {
         sendLineNotification(partnerId, `【Create Next App】📷 画像メッセージ通知\n匿名チャットルームに新しい画像が届きました。`);
       }
-    } catch (err) {
+    } catch {
       alert('画像のアップロードに失敗しました。');
     } finally {
       setChatImageSubmitting(false);
@@ -376,9 +453,61 @@ export default function Home() {
     fetchItems(profile.userId, false);
   };
 
-  const handleDeleteItem = async (itemId: string) => {
+  const handleDeleteItem = async (item: TradeItemSummary & { id: string }) => {
     if (!window.confirm('このトレード情報を削除してもよろしいですか？')) return;
-    await supabase.from('items').delete().eq('id', itemId);
+
+    const storagePath = getSupabaseStoragePath(item.image_url);
+    if (storagePath) {
+      const { error: imageDeleteError } = await supabase.storage.from('item-images').remove([storagePath]);
+      if (imageDeleteError) {
+        alert('画像ファイルの削除に失敗しました。交換情報の削除は続行します。');
+      }
+    }
+
+    const { error } = await supabase.from('items').delete().eq('id', item.id);
+    if (error) {
+      alert('トレード情報の削除に失敗しました。時間をおいて再度お試しください。');
+      return;
+    }
+
+    alert('トレード情報を削除しました。');
+    fetchItems(profile.userId, false);
+  };
+
+  const handleExtendPin = async (item: TradeItemSummary & { id: string }, hours: number, cost: number) => {
+    if (!profile?.userId || item.user_id !== profile.userId) return;
+    if (userCoins < cost) {
+      alert(`コインが不足しています。${hours}時間延長には${cost}枚必要です。`);
+      return;
+    }
+
+    if (!window.confirm(`置トップを${hours}時間延長します。コイン${cost}枚を使用しますか？`)) return;
+
+    const currentPinnedUntil = item.pinned_until ? new Date(item.pinned_until).getTime() : 0;
+    const nowTime = new Date().getTime();
+    const baseTime = currentPinnedUntil > nowTime ? currentPinnedUntil : nowTime;
+    const nextPinnedUntil = new Date(baseTime + hours * 60 * 60 * 1000).toISOString();
+    const nextCoins = userCoins - cost;
+
+    const { error: userError } = await supabase.from('users').update({ coins: nextCoins }).eq('line_id', profile.userId);
+    if (userError) {
+      alert('コインの更新に失敗しました。時間をおいて再度お試しください。');
+      return;
+    }
+
+    const { error: itemError } = await supabase
+      .from('items')
+      .update({ is_pinned: true, pinned_until: nextPinnedUntil })
+      .eq('id', item.id);
+
+    if (itemError) {
+      await supabase.from('users').update({ coins: userCoins }).eq('line_id', profile.userId);
+      alert('置トップ延長に失敗しました。コイン消費を取り消しました。');
+      return;
+    }
+
+    setUserCoins(nextCoins);
+    alert(`置トップを${hours}時間延長しました。`);
     fetchItems(profile.userId, false);
   };
 
@@ -393,22 +522,44 @@ export default function Home() {
     }, 5000);
   };
 
-  const handleChargeCoins = async (amount: number, coinsGranted: number) => {
-    if (!window.confirm(`【決済確認】${amount}円でコイン${coinsGranted}枚を購入しますか？`)) return;
-    const nextCoins = userCoins + coinsGranted;
-    await supabase.from('users').update({ coins: nextCoins }).eq('line_id', profile.userId);
-    setUserCoins(nextCoins);
-    alert('コインの購入が完了しました！');
+  type CheckoutProduct = 'premium' | 'coin10' | 'coin35' | 'coin60';
+
+  const startStripeCheckout = async (product: CheckoutProduct, confirmMessage: string) => {
+    if (!profile?.userId) {
+      alert('LINEログイン情報を取得できませんでした。再読み込みしてください。');
+      return;
+    }
+
+    if (!window.confirm(confirmMessage)) return;
+
+    setCheckoutLoadingProduct(product);
+    try {
+      const response = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product, userId: profile.userId }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || 'Stripe Checkoutの開始に失敗しました。');
+      }
+
+      window.location.href = data.url;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Stripe Checkoutの開始に失敗しました。';
+      alert(message);
+      setCheckoutLoadingProduct(null);
+    }
+  };
+
+  const handleChargeCoins = async (product: Exclude<CheckoutProduct, 'premium'>, coinsGranted: number) => {
+    await startStripeCheckout(product, `【決済確認】コイン${coinsGranted}枚をStripe決済で購入しますか？`);
   };
 
   const handleBuyPremium = async () => {
-    const details = `💎 【プレミアム会員プラン特典のご確認】\n\n有効化すると以下の機能が即座に解放されます：\n\n1. 🔓 【3方巡回自動マッチング】機能が全自動で解放！\n2. 👥 3人閉鎖ループの【匿名3方チャットルーム】への入場権限を獲得！\n3. 📊 複数の2方・3方マッチ結果の【同時マルチ表示】に対応！\n4. 🎁 【購入特典アイテム】トレード固定用コインを50枚プレゼント！\n\n上記の内容で永久プレミアム会員（980円）に登録しますか？`;
-    if (!window.confirm(details)) return;
-    await supabase.from('users').update({ is_premium: true, coins: userCoins + 50 }).eq('line_id', profile.userId);
-    setIsPremium(true); 
-    setUserCoins(userCoins + 50);
-    alert('プレミアム特典が有効化されました！');
-    fetchItems(profile.userId, false);
+    const details = `トレマチ プレミアム（月額680円）\n\n推し活グッズ交換をもっと便利に。\n\n✅ AI 3方巡回マッチング無制限\n✅ 3人専用チャットルーム利用\n✅ 交換情報の優先表示\n✅ 匿名安全取引室（画像アップロード対応）\n✅ 交換予約\n✅ 条件自動追跡通知\n✅ LINE通知\n✅ プレミアム限定機能の先行利用\n✅ 今後追加される特典への優先アクセス\n\nさらに初回登録時にコイン50枚プレゼント。\n\nいつでも解約可能。\n\nStripe決済で登録しますか？`;
+    await startStripeCheckout('premium', details);
   };
 
   const handleSubmitPost = async (e: React.FormEvent) => {
@@ -417,8 +568,8 @@ export default function Home() {
       alert('すべての項目を入力してください。');
       return;
     }
-    const costMap: Record<number, number> = { 0: 1, 1: 5 };
-    const requiredCoins = costMap[pinDuration] || 1;
+    const selectedPinOption = pinOptions.find((option) => option.value === pinDuration) || pinOptions[0];
+    const requiredCoins = selectedPinOption.cost;
     
     if (userCoins < requiredCoins) {
       alert('コインが不足しています。');
@@ -433,13 +584,13 @@ export default function Home() {
         await supabase.storage.from('item-images').upload(fileName, imageFile);
         const { data: { publicUrl } } = supabase.storage.from('item-images').getPublicUrl(fileName);
         uploadedImageUrl = publicUrl;
-      } catch (e) {
+      } catch {
         alert('画像のアップロードに失敗しました。');
       }
     }
 
     await supabase.from('users').update({ coins: userCoins - requiredCoins }).eq('line_id', profile.userId);
-    const pinnedUntilDate = pinDuration > 0 ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
+    const pinnedUntilDate = selectedPinOption.hours > 0 ? new Date(Date.now() + selectedPinOption.hours * 60 * 60 * 1000).toISOString() : null;
 
     await supabase.from('items').insert({
       user_id: profile.userId, title, give_details: giveDetails, want_details: wantDetails,
@@ -459,16 +610,22 @@ export default function Home() {
     }
     setFeedbackSubmitting(true);
     try {
-      await supabase.from('feedbacks').insert({
+      const { error } = await supabase.from('feedbacks').insert({
         user_id: profile?.userId || 'anonymous',
         category: feedbackCategory,
         content: feedbackContent,
         created_at: new Date().toISOString()
       });
+
+      if (error) {
+        alert('フィードバックの送信に失敗しました。通信状況を確認して再度お試しください。');
+        return;
+      }
+
       alert('フィードバックを送信しました。ご協力ありがとうございました！');
       setFeedbackContent('');
-    } catch (err) {
-      alert('送信に失敗しました。');
+    } catch {
+      alert('フィードバックの送信中にエラーが発生しました。時間をおいて再度お試しください。');
     } finally {
       setFeedbackSubmitting(false);
     }
@@ -507,12 +664,20 @@ export default function Home() {
             </div>
 
             {/* 📌 固定条件 */}
-            <div className="bg-slate-900 text-white p-3 rounded-2xl text-[11px] space-y-1 shadow-md border border-slate-700">
+            <div className="bg-slate-900 text-white p-3 rounded-2xl text-[11px] space-y-2 shadow-md border border-slate-700">
               <p className="font-extrabold text-amber-400 text-[10px]">📌 現在の交換ターゲット条件（常時上部に固定）</p>
-              <div className="bg-slate-800 p-2 rounded-xl space-y-1">
-                <p className="truncate"><span className="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded mr-1.5 font-bold">譲</span> {activeChatRoom.currentTargetItem?.give_details}</p>
-                <p className="truncate"><span className="bg-blue-500 text-white text-[8px] px-1.5 py-0.5 rounded mr-1.5 font-bold">求</span> {activeChatRoom.currentTargetItem?.want_details}</p>
-              </div>
+              {activeChatRoom.currentRoute ? (
+                <div className="bg-slate-800 p-2 rounded-xl space-y-1.5">
+                  {getThreeWayRouteLines(activeChatRoom).map((line, idx) => (
+                    <p key={idx} className="break-words leading-relaxed">{line}</p>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-slate-800 p-2 rounded-xl space-y-1">
+                  <p className="truncate"><span className="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded mr-1.5 font-bold">譲</span> {activeChatRoom.currentTargetItem?.give_details}</p>
+                  <p className="truncate"><span className="bg-blue-500 text-white text-[8px] px-1.5 py-0.5 rounded mr-1.5 font-bold">求</span> {activeChatRoom.currentTargetItem?.want_details}</p>
+                </div>
+              )}
             </div>
 
             {/* メッセージ履歴 */}
@@ -536,7 +701,7 @@ export default function Home() {
                 <span>{chatImageSubmitting ? '⏳' : '📷'}</span>
                 <input type="file" accept="image/*" disabled={chatImageSubmitting} onChange={handleSendChatImage} className="hidden" />
               </label>
-              <input type="text" placeholder="メッセージを入力..." value={newMessageText} onChange={(e) => setNewMessageText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="flex-1 text-[14px] px-3 py-2 bg-gray-50 border rounded-xl" />
+              <input type="text" placeholder="メッセージを入力..." value={newMessageText} onChange={(e) => setNewMessageText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="flex-1 text-base px-3 py-2 bg-gray-50 border rounded-xl" />
               <button onClick={handleSendMessage} className="bg-slate-900 text-white font-bold text-xs px-4 py-2 rounded-xl">送信</button>
             </div>
           </div>
@@ -550,7 +715,7 @@ export default function Home() {
           <div>
             <span className="text-xs font-bold block">{profile?.displayName || 'ユーザー'} さん</span>
             <span className="text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-              {isPremium ? '💎 プレミアム会員' : '🔰 一般会員（2方表示限定）'}
+              {isPremium ? '💎 プレミアム会員 / 3方巡回マッチング・優先表示 有効' : '🔰 一般会員（2方表示限定）'}
             </span>
           </div>
         </div>
@@ -568,21 +733,46 @@ export default function Home() {
               <p className="text-xl font-black text-amber-950">{userCoins} <span className="text-xs font-bold">枚</span></p>
             </div>
             {!isPremium && (
-              <button onClick={handleBuyPremium} className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-[10px] font-black px-3 py-2 rounded-xl shadow-md">
-                👑 980円で永久プレミアム登録
+              <button onClick={handleBuyPremium} disabled={checkoutLoadingProduct !== null} className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-[10px] font-black px-3 py-2 rounded-xl shadow-md disabled:opacity-60">
+                {checkoutLoadingProduct === 'premium' ? 'Stripeへ移動中...' : '👑 月額680円でプレミアム登録'}
               </button>
             )}
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <button onClick={() => handleChargeCoins(300, 10)} className="bg-white border rounded-xl p-2 text-center text-xs font-bold">10枚/¥300</button>
-            <button onClick={() => handleChargeCoins(500, 22)} className="bg-white border-2 border-teal-500 rounded-xl p-2 text-center text-xs font-bold text-teal-600">22枚/¥500</button>
-            <button onClick={() => handleChargeCoins(1000, 50)} className="bg-white border rounded-xl p-2 text-center text-xs font-bold">50枚/¥1,000</button>
+            <button onClick={() => handleChargeCoins('coin10', 10)} disabled={checkoutLoadingProduct !== null} className="bg-white border rounded-xl p-2 text-center text-xs font-bold disabled:opacity-60">コイン10枚 / ¥100</button>
+            <button onClick={() => handleChargeCoins('coin35', 35)} disabled={checkoutLoadingProduct !== null} className="bg-white border-2 border-teal-500 rounded-xl p-2 text-center text-xs font-bold text-teal-600 disabled:opacity-60">コイン35枚 / ¥300</button>
+            <button onClick={() => handleChargeCoins('coin60', 60)} disabled={checkoutLoadingProduct !== null} className="bg-white border rounded-xl p-2 text-center text-xs font-bold disabled:opacity-60">コイン60枚 / ¥500</button>
           </div>
           <button onClick={handleWatchAd} disabled={dailyAds >= 3} className="w-full bg-slate-900 text-white p-2 text-center rounded-xl text-[10px] font-bold">
             📺 動画広告視聴で1枚無料獲得 (本日残り: {3 - dailyAds}回)
           </button>
         </div>
       )}
+
+      <div className={`rounded-3xl p-4 mb-4 border shadow-sm ${isPremium ? 'bg-gradient-to-br from-purple-50 to-indigo-50 border-purple-100' : 'bg-white border-gray-100'}`}>
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <p className="text-sm font-black text-slate-900">トレマチ プレミアム（月額680円）</p>
+            <p className="text-xs text-gray-500 mt-1">推し活グッズ交換をもっと便利に。</p>
+            {isPremium && <p className="text-[11px] text-purple-700 font-black mt-1">💎 プレミアム会員 / 3方巡回マッチング・優先表示 有効</p>}
+          </div>
+          <span className={`text-[10px] font-black px-2 py-1 rounded-full ${isPremium ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{isPremium ? '有効' : 'LOCKED'}</span>
+        </div>
+        <div className="grid grid-cols-1 gap-1.5">
+          {premiumBenefits.map((benefit) => (
+            <div key={benefit} className="flex items-center justify-between gap-2 bg-white/70 rounded-xl px-3 py-2 border border-white text-[11px]">
+              <span className="font-bold text-gray-700">✅ {benefit}</span>
+              {plannedPremiumFeatures.includes(benefit) && <span className="shrink-0 bg-amber-100 text-amber-700 text-[9px] font-black px-2 py-0.5 rounded-full">近日対応予定</span>}
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-purple-700 font-bold mt-3">さらに初回登録時にコイン50枚プレゼント。いつでも解約可能。</p>
+        {!isPremium && (
+          <button onClick={handleBuyPremium} disabled={checkoutLoadingProduct !== null} className="mt-3 w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-black py-3 rounded-2xl shadow-md disabled:opacity-60">
+            {checkoutLoadingProduct === 'premium' ? 'Stripeへ移動中...' : '👑 月額680円でプレミアム登録'}
+          </button>
+        )}
+      </div>
 
       {/* ⚡ マッチングウィンドウ（双方向・三方向） */}
       <div className="space-y-3 mb-4">
@@ -623,12 +813,12 @@ export default function Home() {
                   const roomInfo = roomExtraMap[m.fingerprint];
                   return (
                     <div key={m.fingerprint} className="bg-white/10 rounded-xl p-2.5 flex flex-col space-y-2 border border-white/5">
-                      <p className="text-[10px] text-amber-300 font-medium break-all leading-relaxed">{m.routeText}</p>
+                      <div className="text-[10px] text-amber-200 font-medium break-all leading-relaxed space-y-1">{[`${getDisplayName(m.itemA, 'ユーザー1')}さんの「${m.itemA.give_details}」→ ${getDisplayName(m.itemB, 'ユーザー2')}さんへ`, `${getDisplayName(m.itemB, 'ユーザー2')}さんの「${m.itemB.give_details}」→ ${getDisplayName(m.itemC, 'ユーザー3')}さんへ`, `${getDisplayName(m.itemC, 'ユーザー3')}さんの「${m.itemC.give_details}」→ ${getDisplayName(m.itemA, 'ユーザー1')}さんへ`].map((line) => <p key={line}>{line}</p>)}</div>
                       <div className="flex justify-between items-center pt-1.5 border-t border-white/10">
                         <span className="text-[9px] text-indigo-300 font-medium">
                           🕒 最終更新: {formatJapaneseTime(roomInfo?.lastTime)}
                         </span>
-                        <button onClick={() => handleOpenChat(m.itemA, m.fingerprint, m.participants)} className="bg-indigo-500 hover:bg-indigo-600 text-[9px] font-black px-3 py-1 rounded-lg">
+                        <button onClick={() => handleOpenChat(m.itemA, m.fingerprint, m.participants, { itemA: m.itemA, itemB: m.itemB, itemC: m.itemC })} className="bg-indigo-500 hover:bg-indigo-600 text-[9px] font-black px-3 py-1 rounded-lg">
                           3人部屋チャットに入る 💬
                         </button>
                       </div>
@@ -649,10 +839,10 @@ export default function Home() {
       {/* トレード情報登録フォーム */}
       <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 mb-4">
         <form onSubmit={handleSubmitPost} className="space-y-3">
-          <input type="text" placeholder="シリーズ名 / グッズ名（例: POP MART）" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full text-[14px] px-3 py-2 bg-gray-50 border rounded-xl" />
+          <input type="text" placeholder="シリーズ名 / グッズ名（例: POP MART）" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full text-base px-3 py-2 bg-gray-50 border rounded-xl" />
           <div className="grid grid-cols-2 gap-2">
-            <input type="text" placeholder="【譲】持っている種類" value={giveDetails} onChange={(e) => setGiveDetails(e.target.value)} className="w-full text-[14px] px-3 py-2 bg-red-50/50 border border-red-100 rounded-xl" />
-            <input type="text" placeholder="【求】探している種類" value={wantDetails} onChange={(e) => setWantDetails(e.target.value)} className="w-full text-[14px] px-3 py-2 bg-blue-50/50 border border-blue-100 rounded-xl" />
+            <input type="text" placeholder="【譲】持っている種類" value={giveDetails} onChange={(e) => setGiveDetails(e.target.value)} className="w-full text-base px-3 py-2 bg-red-50/50 border border-red-100 rounded-xl" />
+            <input type="text" placeholder="【求】探している種類" value={wantDetails} onChange={(e) => setWantDetails(e.target.value)} className="w-full text-base px-3 py-2 bg-blue-50/50 border border-blue-100 rounded-xl" />
           </div>
           <div className="flex items-center justify-between pt-1">
             <label className="w-9 h-9 bg-gray-50 border border-dashed rounded-xl flex items-center justify-center cursor-pointer text-gray-400 text-sm shrink-0">
@@ -661,9 +851,10 @@ export default function Home() {
             </label>
             {imagePreview && <img src={imagePreview} className="w-9 h-9 object-cover rounded-xl border mr-auto ml-2" />}
             <div className="flex gap-2 items-center">
-              <select value={pinDuration} onChange={(e) => setPinDuration(Number(e.target.value))} className="text-[11px] bg-gray-50 border p-1.5 rounded-lg text-gray-600">
-                <option value={0}>固定なし (1枚)</option>
-                <option value={1}>24h上位固定 (5枚)</option>
+              <select value={pinDuration} onChange={(e) => setPinDuration(Number(e.target.value))} className="text-base bg-gray-50 border p-2 rounded-lg text-gray-600 max-w-[185px]">
+                {pinOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
               <button type="submit" disabled={submitting} className="bg-slate-900 text-white font-bold text-[11px] px-4 py-2 rounded-xl">登録 🚀</button>
             </div>
@@ -673,49 +864,79 @@ export default function Home() {
 
       {/* タイムライン */}
       <div className="space-y-3 mb-6">
-        <input type="text" placeholder="キーワードでトレード情報を検索..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full text-[14px] px-3 py-2 bg-white border border-gray-200 rounded-xl shadow-sm" />
+        <input type="text" placeholder="キーワードでトレード情報を検索..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full text-base px-3 py-2 bg-white border border-gray-200 rounded-xl shadow-sm" />
 
-        {filteredItems.map((item) => (
-          <div key={item.id} className={`bg-white rounded-2xl p-4 shadow-sm border transition-all ${item.status === 'completed' ? 'opacity-40 bg-gray-100/50' : item.is_pinned ? 'border-amber-400 ring-1 ring-amber-300 bg-amber-50/10' : 'border-gray-100'}`}>
-            <div className="flex items-start justify-between mb-2">
-              <span className="text-xs font-black text-gray-900 bg-gray-100 px-2 py-0.5 rounded-md truncate max-w-[65%]">{item.title || 'グッズ'}</span>
-              <span className={`text-[9px] px-2 py-0.5 rounded font-black ${item.status === 'completed' ? 'bg-gray-200 text-gray-500' : 'bg-amber-50 text-amber-700'}`}>{item.status === 'completed' ? '交換完了' : '交換待ち'}</span>
-            </div>
+        {filteredItems.map((item) => {
+          const isOwner = profile && item.user_id === profile.userId;
+          return (
+            <div key={item.id} className={`bg-white rounded-3xl p-3 shadow-[0_8px_24px_rgba(15,23,42,0.06)] border transition-all ${item.status === 'completed' ? 'opacity-60 bg-gray-50' : item.is_pinned ? 'border-amber-300 ring-1 ring-amber-200 bg-gradient-to-br from-amber-50/70 to-white' : 'border-pink-50'}`}>
+              <div className="flex items-start gap-3">
+                {item.image_url ? (
+                  <img src={item.image_url} onClick={() => setZoomImageUrl(item.image_url)} className="w-28 h-28 object-cover rounded-2xl cursor-zoom-in border border-gray-100 bg-gray-50 shrink-0" />
+                ) : (
+                  <div className="w-28 h-28 rounded-2xl border border-dashed border-pink-100 bg-pink-50/50 flex items-center justify-center text-2xl shrink-0">🎁</div>
+                )}
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-slate-900 truncate">{item.title || 'グッズ'}</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">{item.users?.display_name || 'ユーザー'} • {formatJapaneseTime(item.created_at)}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      {item.is_pinned && item.status !== 'completed' && <span className="bg-amber-100 text-amber-700 text-[9px] font-black px-2 py-0.5 rounded-full">置トップ</span>}
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full font-black ${item.status === 'completed' ? 'bg-gray-200 text-gray-500' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>{item.status === 'completed' ? '交換完了' : '交換待ち'}</span>
+                    </div>
+                  </div>
 
-            {item.image_url && <img src={item.image_url} onClick={() => setZoomImageUrl(item.image_url)} className="w-full h-32 object-cover rounded-xl mb-2 cursor-zoom-in" />}
+                  <div className="space-y-1.5 text-[13px] leading-relaxed">
+                    <div className="bg-rose-50/80 border border-rose-100 rounded-2xl p-2 flex gap-2">
+                      <span className="bg-rose-400 text-white text-[10px] font-black px-2 py-0.5 rounded-full h-fit">譲</span>
+                      <p className="font-bold text-rose-950 break-all">{item.give_details}</p>
+                    </div>
+                    <div className="bg-sky-50/80 border border-sky-100 rounded-2xl p-2 flex gap-2">
+                      <span className="bg-sky-400 text-white text-[10px] font-black px-2 py-0.5 rounded-full h-fit">求</span>
+                      <p className="font-bold text-sky-950 break-all">{item.want_details}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-            <div className="bg-gray-50/80 rounded-xl p-2.5 space-y-1 text-xs mb-2">
-              <div><span className="bg-[#E53E3E] text-white text-[8px] font-black px-1.5 py-0.5 rounded mr-1.5">譲</span>{item.give_details}</div>
-              <div className="border-t border-gray-200/40 pt-1"><span className="bg-[#3182CE] text-white text-[8px] font-black px-1.5 py-0.5 rounded mr-1.5">求</span>{item.want_details}</div>
-            </div>
-
-            <div className="flex items-center justify-between pt-0.5">
-              <p className="text-[9px] text-gray-400">{item.users?.display_name || 'ユーザー'} • {formatJapaneseTime(item.created_at)}</p>
-              
-              <div className="flex gap-1.5">
-                {profile && item.user_id === profile.userId ? (
+              <div className="flex flex-col gap-2 pt-3 mt-3 border-t border-gray-100">
+                {isOwner ? (
                   <>
-                    <button onClick={() => handleMarkCompleted(item.id, item.status)} className="bg-white border border-gray-300 text-gray-700 text-[10px] font-bold px-2 py-1 rounded-lg">
-                      {item.status === 'completed' ? '再受付' : '完了'}
-                    </button>
-                    <button onClick={() => handleDeleteItem(item.id)} className="bg-red-50 text-red-600 text-[10px] font-bold px-2 py-1 rounded-lg border border-red-100">
-                      削除
-                    </button>
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                      <span className="text-[10px] font-black text-amber-700 shrink-0">置トップ延長</span>
+                      {pinExtensionOptions.map((option) => (
+                        <button key={option.hours} onClick={() => handleExtendPin(item, option.hours, option.cost)} className="bg-amber-50 text-amber-700 text-[10px] font-bold px-2 py-1 rounded-lg border border-amber-100 shrink-0">
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex justify-end gap-1.5">
+                      <button onClick={() => handleMarkCompleted(item.id, item.status)} className="bg-white border border-gray-300 text-gray-700 text-[10px] font-bold px-3 py-1.5 rounded-lg">
+                        {item.status === 'completed' ? '再受付' : '完了'}
+                      </button>
+                      <button onClick={() => handleDeleteItem(item)} className="bg-red-50 text-red-600 text-[10px] font-bold px-3 py-1.5 rounded-lg border border-red-100">
+                        削除
+                      </button>
+                    </div>
                   </>
                 ) : (
                   item.status !== 'completed' && (
-                    <button onClick={() => {
-                      const fp = `twoway_${[profile.userId, item.user_id].sort().join('_')}_${item.give_details}_${item.want_details}`.toLowerCase().trim();
-                      handleOpenChat(item, fp, [profile.userId, item.user_id]);
-                    }} className="bg-[#06C755] text-white font-bold text-[10px] px-3 py-1 rounded-lg">
-                      💬 匿名チャット
-                    </button>
+                    <div className="flex justify-end">
+                      <button onClick={() => {
+                        const fp = `twoway_${[profile.userId, item.user_id].sort().join('_')}_${item.give_details}_${item.want_details}`.toLowerCase().trim();
+                        handleOpenChat(item, fp, [profile.userId, item.user_id]);
+                      }} className="bg-[#06C755] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg shadow-sm">
+                        💬 匿名チャット
+                      </button>
+                    </div>
                   )
                 )}
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* 📬 フィードバック送信フォーム */}
@@ -729,8 +950,8 @@ export default function Home() {
               </button>
             ))}
           </div>
-          <textarea rows={3} placeholder="こちらに詳細をご記入ください。開発チームが確認いたします。" value={feedbackContent} onChange={(e) => setFeedbackContent(e.target.value)} className="w-full text-[13px] p-2.5 bg-gray-50 border rounded-xl focus:outline-none placeholder:text-gray-400" />
-          <button type="submit" disabled={feedbackSubmitting} className="w-full bg-slate-950 text-white font-bold text-xs p-2 rounded-xl transition-all">
+          <textarea rows={3} placeholder="こちらに詳細をご記入ください。開発チームが確認いたします。" value={feedbackContent} onChange={(e) => setFeedbackContent(e.target.value)} className="w-full text-base p-2.5 bg-gray-50 border rounded-xl focus:outline-none placeholder:text-gray-400" />
+          <button type="submit" disabled={feedbackSubmitting} className="w-full bg-slate-950 text-white font-bold text-xs p-2 rounded-xl transition-all disabled:opacity-60">
             {feedbackSubmitting ? '送信中...' : 'フィードバックを送信する ✉️'}
           </button>
         </form>
