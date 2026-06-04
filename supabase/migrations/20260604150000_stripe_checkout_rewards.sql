@@ -1,4 +1,6 @@
 create table if not exists public.stripe_checkout_rewards (
+  -- Stripe may retry webhooks; this primary key makes session_id unique so
+  -- one Checkout Session can only be rewarded once.
   session_id text primary key,
   line_id text not null,
   product_type text not null check (product_type in ('premium', 'coin10', 'coin35', 'coin60')),
@@ -33,6 +35,8 @@ begin
     p_coins_delta,
     p_is_premium
   )
+  -- If Stripe retries the same checkout.session.completed event, the unique
+  -- session_id/primary-key conflict skips the reward update below.
   on conflict (session_id) do nothing;
 
   if not found then
@@ -53,4 +57,5 @@ begin
 end;
 $$;
 
-grant execute on function public.award_stripe_checkout_reward(text, text, text, integer, boolean) to anon, authenticated, service_role;
+revoke execute on function public.award_stripe_checkout_reward(text, text, text, integer, boolean) from anon, authenticated;
+grant execute on function public.award_stripe_checkout_reward(text, text, text, integer, boolean) to service_role;

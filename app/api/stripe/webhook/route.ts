@@ -98,15 +98,18 @@ export async function POST(request: Request) {
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!supabaseUrl || !supabaseAnonKey) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
     return NextResponse.json({ error: 'Supabase is not configured.' }, { status: 500 });
   }
 
   const reward = rewardByProduct[productType];
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
+  // Duplicate protection lives in the database RPC: the Stripe Checkout
+  // session id is inserted before rewards are applied, and webhook retries
+  // hit the unique session_id constraint instead of granting coins twice.
   const { data, error } = await supabase.rpc('award_stripe_checkout_reward', {
     p_session_id: session.id,
     p_user_id: userId,
