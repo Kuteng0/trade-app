@@ -16,11 +16,23 @@ type TradeItemSummary = {
   users?: { display_name?: string | null } | null;
 };
 
-type MatchRoute = {
+type TwoWayRoute = {
   itemA: TradeItemSummary;
   itemB: TradeItemSummary;
-  itemC?: TradeItemSummary;
+  itemC?: undefined;
 };
+
+type ThreeWayRoute = {
+  itemA: TradeItemSummary;
+  itemB: TradeItemSummary;
+  itemC: TradeItemSummary;
+};
+
+type ChatRoomWithRoute = {
+  currentRoute?: ThreeWayRoute;
+};
+
+type MatchRoute = TwoWayRoute | ThreeWayRoute;
 
 const PIN_OPTIONS = [
   { value: 0, label: '固定なし（1枚）', hours: 0, cost: 1 },
@@ -44,6 +56,20 @@ const getSupabaseStoragePath = (imageUrl: string | null | undefined) => {
 };
 
 const getDisplayName = (item: TradeItemSummary, fallback: string) => item.users?.display_name || fallback;
+
+const getThreeWayRouteLines = (room: ChatRoomWithRoute | null) => {
+  const route = room?.currentRoute;
+  if (!route) return [];
+  const nameA = getDisplayName(route.itemA, 'ユーザー1');
+  const nameB = getDisplayName(route.itemB, 'ユーザー2');
+  const nameC = getDisplayName(route.itemC, 'ユーザー3');
+
+  return [
+    `${nameA}さんの「${route.itemA.give_details}」→ ${nameB}さんへ`,
+    `${nameB}さんの「${route.itemB.give_details}」→ ${nameC}さんへ`,
+    `${nameC}さんの「${route.itemC.give_details}」→ ${nameA}さんへ`,
+  ];
+};
 
 const getRouteLines = (route: MatchRoute | undefined) => {
   if (!route?.itemA || !route?.itemB) return [];
@@ -911,7 +937,7 @@ export default function Home() {
                   const roomInfo = roomExtraMap[m.fingerprint];
                   return (
                     <div key={m.fingerprint} className="bg-white/10 rounded-xl p-2.5 flex flex-col space-y-2 border border-white/5">
-                      <div className="text-[10px] text-amber-200 font-medium break-all leading-relaxed space-y-1">{getRouteLines({ itemA: m.itemA, itemB: m.itemB, itemC: m.itemC }).map((line) => <p key={line}>{line}</p>)}</div>
+                      <div className="text-[10px] text-amber-200 font-medium break-all leading-relaxed space-y-1">{getThreeWayRouteLines({ currentRoute: { itemA: m.itemA, itemB: m.itemB, itemC: m.itemC } }).map((line) => <p key={line}>{line}</p>)}</div>
                       <div className="flex justify-between items-center pt-1.5 border-t border-white/10">
                         <span className="text-[9px] text-indigo-300 font-medium">
                           🕒 最終更新: {formatJapaneseTime(roomInfo?.lastTime)}
