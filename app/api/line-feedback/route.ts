@@ -6,8 +6,16 @@ export async function POST(request: Request) {
     const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
     const adminLineUserId = process.env.ADMIN_LINE_USER_ID;
 
-    if (!lineToken || !adminLineUserId) {
-      return NextResponse.json({ error: 'LINE feedback notification is not configured.' }, { status: 500 });
+    if (!lineToken) {
+      return NextResponse.json({ error: 'LINE_CHANNEL_ACCESS_TOKEN が設定されていません。' }, { status: 500 });
+    }
+
+    if (!adminLineUserId) {
+      return NextResponse.json({ error: 'ADMIN_LINE_USER_ID が設定されていません。Supabase users.line_id から管理者の LINE userId（U で始まる値）を設定してください。' }, { status: 500 });
+    }
+
+    if (!adminLineUserId.startsWith('U')) {
+      return NextResponse.json({ error: 'ADMIN_LINE_USER_ID は U で始まる LINE userId を設定してください。Channel ID や @ から始まる公式アカウントIDは使用できません。' }, { status: 500 });
     }
 
     const messageText = [
@@ -34,7 +42,11 @@ export async function POST(request: Request) {
 
     if (!response.ok) {
       const details = await response.text();
-      return NextResponse.json({ error: 'LINEフィードバック通知に失敗しました。', details }, { status: response.status });
+      console.error('LINE feedback notification failed:', {
+        status: response.status,
+        body: details,
+      });
+      return NextResponse.json({ error: 'LINEフィードバック通知に失敗しました。設定を確認してください。' }, { status: response.status });
     }
 
     return NextResponse.json({ success: true });

@@ -151,62 +151,6 @@ export default function Home() {
   const [roomExtraMap, setRoomExtraMap] = useState<Record<string, { lastTime: string; id: string }>>({});
   const [pinActionItem, setPinActionItem] = useState<(TradeItemSummary & { id: string }) | null>(null);
 
-
-  const premiumBenefits = [
-    'AI 3方巡回マッチング無制限',
-    '3人専用チャットルーム利用',
-    '交換情報の優先表示',
-    '匿名安全取引室（画像アップロード対応）',
-    '交換予約',
-    '条件自動追跡通知',
-    'LINE通知',
-    'プレミアム限定機能の先行利用',
-    '今後追加される特典への優先アクセス',
-  ];
-
-  const plannedPremiumFeatures = [
-    '匿名安全取引室（画像アップロード対応）',
-    '交換予約',
-    '条件自動追跡通知',
-    'LINE通知',
-  ];
-
-  const pinOptions = [
-    { value: 0, label: '固定なし（1枚）', hours: 0, cost: 1 },
-    { value: 24, label: '24時間置トップ（5枚）', hours: 24, cost: 5 },
-    { value: 48, label: '48時間置トップ（8枚）', hours: 48, cost: 8 },
-    { value: 72, label: '72時間置トップ（10枚）', hours: 72, cost: 10 },
-  ];
-
-  const pinExtensionOptions = [
-    { hours: 24, label: '24時間延長（5枚）', cost: 5 },
-    { hours: 48, label: '48時間延長（8枚）', cost: 8 },
-    { hours: 72, label: '72時間延長（10枚）', cost: 10 },
-  ];
-
-  const getSupabaseStoragePath = (imageUrl: string | null | undefined) => {
-    if (!imageUrl) return null;
-    const marker = '/item-images/';
-    const markerIndex = imageUrl.indexOf(marker);
-    if (markerIndex === -1) return null;
-    return decodeURIComponent(imageUrl.slice(markerIndex + marker.length).split('?')[0]);
-  };
-
-  const getDisplayName = (item: TradeItemSummary, fallback: string) => item.users?.display_name || fallback;
-
-  const getThreeWayRouteLines = (room: ChatRoomWithRoute | null) => {
-    const route = room?.currentRoute;
-    if (!route?.itemA || !route?.itemB || !route?.itemC) return [];
-    const nameA = getDisplayName(route.itemA, 'ユーザー1');
-    const nameB = getDisplayName(route.itemB, 'ユーザー2');
-    const nameC = getDisplayName(route.itemC, 'ユーザー3');
-    return [
-      `${nameA}さんの「${route.itemA.give_details}」→ ${nameB}さんへ`,
-      `${nameB}さんの「${route.itemB.give_details}」→ ${nameC}さんへ`,
-      `${nameC}さんの「${route.itemC.give_details}」→ ${nameA}さんへ`,
-    ];
-  };
-
   // 相対時間計算ヘルパー
   const formatJapaneseTime = (dateString: string | null | undefined) => {
     if (!dateString) return 'なし';
@@ -770,7 +714,7 @@ export default function Home() {
       });
 
       if (!notifyResponse.ok) {
-        alert('フィードバックは保存されましたが、管理者へのLINE通知に失敗しました。');
+        alert('フィードバックは保存されましたが、管理者へのLINE通知に失敗しました。設定を確認してください。');
       } else {
         alert('フィードバックを送信しました。ご協力ありがとうございました！');
       }
@@ -1083,21 +1027,17 @@ export default function Home() {
 
               <div className="flex flex-col gap-2 pt-3 mt-3 border-t border-gray-100">
                 {isOwner ? (
-                  <>
-                    <div className="flex justify-end">
-                      <button onClick={() => setPinActionItem(item)} className="bg-amber-50 text-amber-700 text-[10px] font-bold px-3 py-1.5 rounded-lg border border-amber-100">
-                        {getPinActionLabel(item)}
-                      </button>
-                    </div>
-                    <div className="flex justify-end gap-1.5">
-                      <button onClick={() => handleMarkCompleted(item.id, item.status)} className="bg-white border border-gray-300 text-gray-700 text-[10px] font-bold px-3 py-1.5 rounded-lg">
-                        {item.status === 'completed' ? '再受付' : '完了'}
-                      </button>
-                      <button onClick={() => handleDeleteItem(item)} className="bg-red-50 text-red-600 text-[10px] font-bold px-3 py-1.5 rounded-lg border border-red-100">
-                        削除
-                      </button>
-                    </div>
-                  </>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button onClick={() => setPinActionItem(item)} className="bg-amber-50 text-amber-700 text-[10px] font-bold px-2 py-1.5 rounded-lg border border-amber-100 whitespace-nowrap">
+                      {getPinActionLabel(item)}
+                    </button>
+                    <button onClick={() => handleMarkCompleted(item.id, item.status)} className="bg-white border border-gray-300 text-gray-700 text-[10px] font-bold px-2 py-1.5 rounded-lg whitespace-nowrap">
+                      {item.status === 'completed' ? '再受付' : '完了'}
+                    </button>
+                    <button onClick={() => handleDeleteItem(item)} className="bg-red-50 text-red-600 text-[10px] font-bold px-2 py-1.5 rounded-lg border border-red-100 whitespace-nowrap">
+                      削除
+                    </button>
+                  </div>
                 ) : (
                   item.status !== 'completed' && (
                     <div className="flex justify-end">
