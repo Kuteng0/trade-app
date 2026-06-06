@@ -1,8 +1,16 @@
 {
   "crons": [
     {
+      "path": "/api/admin/expire-pins",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/admin/process-condition-tracking",
+      "schedule": "0 * * * *"
+    },
+    {
       "path": "/api/admin/cleanup-orphan-item-images",
-      "schedule": "0 18 * * *"
+      "schedule": "0 * * * *"
     }
   ]
 }

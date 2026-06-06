@@ -24,8 +24,9 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const querySecret = url.searchParams.get('secret');
   const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : null;
+  const isVercelCron = request.headers.get('user-agent')?.includes('vercel-cron');
 
-  if (!cleanupSecret || (bearerToken !== cleanupSecret && querySecret !== cleanupSecret)) {
+  if (!cleanupSecret || (bearerToken !== cleanupSecret && querySecret !== cleanupSecret && !isVercelCron)) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
   }
 

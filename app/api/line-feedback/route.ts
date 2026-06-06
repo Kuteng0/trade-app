@@ -1,3 +1,4 @@
+import { sendLineNotification } from '@/lib/line';
 import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
@@ -28,25 +29,14 @@ export async function POST(request: Request) {
       content || '(本文なし)',
     ].join('\n');
 
-    const response = await fetch('https://api.line.me/v2/bot/message/push', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${lineToken}`,
-      },
-      body: JSON.stringify({
-        to: adminLineUserId,
-        messages: [{ type: 'text', text: messageText }],
-      }),
-    });
+    const result = await sendLineNotification(adminLineUserId, messageText);
 
-    if (!response.ok) {
-      const details = await response.text();
+    if (!result.ok) {
       console.error('LINE feedback notification failed:', {
-        status: response.status,
-        body: details,
+        status: result.status,
+        body: result.body,
       });
-      return NextResponse.json({ error: 'LINEフィードバック通知に失敗しました。設定を確認してください。' }, { status: response.status });
+      return NextResponse.json({ error: 'LINEフィードバック通知に失敗しました。設定を確認してください。' }, { status: result.status });
     }
 
     return NextResponse.json({ success: true });

@@ -122,6 +122,9 @@ export default function Home() {
   // ----------------------------------------------------
   const [searchTerm, setSearchTerm] = useState('');
   const [items, setItems] = useState<any[]>([]);
+  const [itemReservationMap, setItemReservationMap] = useState<Record<string, { count: number; mine: boolean; reservationId?: string }>>({});
+  const [trackingKeyword, setTrackingKeyword] = useState('');
+  const [trackingConditions, setTrackingConditions] = useState<any[]>([]);
 
   // ----------------------------------------------------
   // 4. ユーザーフィードバック機能ステート
@@ -160,6 +163,15 @@ export default function Home() {
     if (elapsed < 3600000) return Math.round(elapsed / 60000) + '分前';   
     if (elapsed < 86400000) return Math.round(elapsed / 3600000) + '時間前';   
     return (past.getMonth() + 1) + '月' + past.getDate() + '日';
+  };
+
+
+  const formatPinRemaining = (dateString: string | null | undefined) => {
+    if (!dateString) return '';
+    const remaining = new Date(dateString).getTime() - Date.now();
+    if (remaining <= 0) return '';
+    const hours = Math.ceil(remaining / 3600000);
+    return `残り${hours}時間`;
   };
 
   // LINE通知用ヘルパー関数
@@ -326,9 +338,44 @@ export default function Home() {
       });
 
       setItems(sorted);
+
+      const itemIds = sorted.map((item) => item.id).filter(Boolean);
+      if (itemIds.length > 0) {
+        const { data: reservations } = await supabase
+          .from('exchange_reservations')
+          .select('id, item_id, user_id')
+          .in('item_id', itemIds)
+          .not('user_id', 'is', null);
+        const reservationMap: Record<string, { count: number; mine: boolean; reservationId?: string }> = {};
+        (reservations || []).forEach((reservation) => {
+          const itemId = reservation.item_id;
+          if (!itemId) return;
+          const current = reservationMap[itemId] || { count: 0, mine: false };
+          current.count += 1;
+          if (reservation.user_id === targetUserId) {
+            current.mine = true;
+            current.reservationId = reservation.id;
+          }
+          reservationMap[itemId] = current;
+        });
+        setItemReservationMap(reservationMap);
+      } else {
+        setItemReservationMap({});
+      }
+
       await calculateAllMatches(sorted, triggerNotification, targetUserId);
     }
   };
+
+  const fetchTrackingConditions = async (userId: string) => {
+    const { data } = await supabase
+      .from('tracking_conditions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    setTrackingConditions(data || []);
+  };
+
 
   useEffect(() => {
     import('@line/liff').then((mod) => {
@@ -346,6 +393,7 @@ export default function Home() {
           });
           
           await fetchItems(userProfile.userId, false);
+          await fetchTrackingConditions(userProfile.userId);
           setLoading(false);
         }).catch(() => setLoading(false));
     });
@@ -388,6 +436,9 @@ export default function Home() {
         })
         .select().single();
       room = newRoom;
+      participants
+        .filter((userId) => userId !== profile?.userId)
+        .forEach((userId) => sendLineNotification(userId, '【トレマチ】交換チャットが作成されました。アプリを開いて内容を確認してください。'));
     }
 
     if (room) {
@@ -550,6 +601,65 @@ export default function Home() {
     fetchItems(profile.userId, false);
   };
 
+
+  const handleToggleReservation = async (item: any) => {
+    if (!profile?.userId || item.user_id === profile.userId) return;
+    const reservation = itemReservationMap[item.id];
+
+    if (reservation?.mine && reservation.reservationId) {
+      const { error } = await supabase
+        .from('exchange_reservations')
+        .delete()
+        .eq('id', reservation.reservationId);
+      if (error) {
+        alert('予約のキャンセルに失敗しました。時間をおいて再度お試しください。');
+        return;
+      }
+      await sendLineNotification(item.user_id, `【トレマチ】「${item.title || 'グッズ'}」の予約がキャンセルされました。`);
+      alert('予約をキャンセルしました。');
+      fetchItems(profile.userId, false);
+      return;
+    }
+
+    const { error } = await supabase.from('exchange_reservations').insert({
+      item_id: item.id,
+      user_id: profile.userId,
+      created_by: profile.userId,
+      participant_ids: [profile.userId, item.user_id],
+    });
+
+    if (error) {
+      alert('予約に失敗しました。すでに予約済みの可能性があります。');
+      return;
+    }
+
+    await sendLineNotification(item.user_id, `【トレマチ】「${item.title || 'グッズ'}」に新しい予約が入りました。`);
+    alert('予約しました。');
+    fetchItems(profile.userId, false);
+  };
+
+  const handleAddTrackingCondition = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile?.userId || !trackingKeyword.trim()) return;
+    const { error } = await supabase.from('tracking_conditions').insert({
+      user_id: profile.userId,
+      keyword: trackingKeyword.trim(),
+    });
+    if (error) {
+      alert('追跡条件の登録に失敗しました。同じ条件が登録済みの可能性があります。');
+      return;
+    }
+    setTrackingKeyword('');
+    await fetchTrackingConditions(profile.userId);
+    alert('追跡条件を登録しました。');
+  };
+
+  const handleDeleteTrackingCondition = async (id: string) => {
+    if (!profile?.userId) return;
+    await supabase.from('tracking_conditions').delete().eq('id', id).eq('user_id', profile.userId);
+    await fetchTrackingConditions(profile.userId);
+  };
+
   const handleExtendPin = async (item: TradeItemSummary & { id: string }, hours: number, cost: number) => {
     if (!profile?.userId || item.user_id !== profile.userId) return;
     const actionLabel = getPinActionLabel(item);
@@ -670,10 +780,18 @@ export default function Home() {
     await supabase.from('users').update({ coins: userCoins - requiredCoins }).eq('line_id', profile.userId);
     const pinnedUntilDate = selectedPinOption.hours > 0 ? new Date(Date.now() + selectedPinOption.hours * 60 * 60 * 1000).toISOString() : null;
 
-    await supabase.from('items').insert({
+    const { data: insertedItem } = await supabase.from('items').insert({
       user_id: profile.userId, title, give_details: giveDetails, want_details: wantDetails,
       image_url: uploadedImageUrl, status: 'matching', is_pinned: pinDuration > 0, pinned_until: pinnedUntilDate
-    });
+    }).select('id').single();
+
+    if (insertedItem?.id) {
+      fetch('/api/condition-notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId: insertedItem.id }),
+      }).catch(() => {});
+    }
 
     setSubmitting(false); setTitle(''); setGiveDetails(''); setWantDetails(''); setImageFile(null); setImagePreview(''); setPinDuration(0);
     fetchItems(profile.userId, true);
@@ -898,6 +1016,26 @@ export default function Home() {
         </button>
       </div>
 
+      <div className="bg-white rounded-3xl p-4 mb-4 border border-indigo-100 shadow-sm space-y-3">
+        <div>
+          <p className="text-xs font-black text-slate-900">条件自動追跡通知</p>
+          <p className="text-[10px] text-gray-500 mt-1">缶バッジ、アクスタ、ブルーロックなど気になる条件を登録できます。</p>
+        </div>
+        <form onSubmit={handleAddTrackingCondition} className="flex gap-2">
+          <input type="text" placeholder="追跡キーワード" value={trackingKeyword} onChange={(e) => setTrackingKeyword(e.target.value)} className="flex-1 text-base px-3 py-2 bg-gray-50 border border-indigo-100 rounded-xl" />
+          <button type="submit" className="bg-indigo-600 text-white text-[10px] font-black px-3 py-2 rounded-xl">追加</button>
+        </form>
+        {trackingConditions.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {trackingConditions.map((condition) => (
+              <button key={condition.id} onClick={() => handleDeleteTrackingCondition(condition.id)} className="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-full border border-indigo-100">
+                {condition.keyword} ✕
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* ⚡ マッチングウィンドウ（双方向・三方向） */}
       <div className="space-y-3 mb-4">
         {twoWayMatches.length > 0 && (
@@ -992,6 +1130,7 @@ export default function Home() {
 
         {filteredItems.map((item) => {
           const isOwner = profile && item.user_id === profile.userId;
+          const reservationInfo = itemReservationMap[item.id] || { count: 0, mine: false };
           return (
             <div key={item.id} className={`bg-white rounded-3xl p-3 shadow-[0_8px_24px_rgba(15,23,42,0.06)] border transition-all ${item.status === 'completed' ? 'opacity-60 bg-gray-50' : item.is_pinned ? 'border-amber-300 ring-1 ring-amber-200 bg-gradient-to-br from-amber-50/70 to-white' : 'border-pink-50'}`}>
               <div className="flex items-start gap-3">
@@ -1009,6 +1148,9 @@ export default function Home() {
                     <div className="flex flex-col items-end gap-1 shrink-0">
                       {item.is_pinned && item.status !== 'completed' && <span className="bg-amber-100 text-amber-700 text-[9px] font-black px-2 py-0.5 rounded-full">置トップ</span>}
                       <span className={`text-[9px] px-2 py-0.5 rounded-full font-black ${item.status === 'completed' ? 'bg-gray-200 text-gray-500' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>{item.status === 'completed' ? '交換完了' : '交換待ち'}</span>
+                      {reservationInfo.count > 0 && <span className="bg-violet-100 text-violet-700 text-[9px] font-black px-2 py-0.5 rounded-full">予約中</span>}
+                      {isOwner && reservationInfo.count > 0 && <span className="bg-violet-50 text-violet-700 text-[9px] font-black px-2 py-0.5 rounded-full">予約{reservationInfo.count}件</span>}
+                      {item.is_pinned && formatPinRemaining(item.pinned_until) && <span className="bg-amber-50 text-amber-700 text-[9px] font-black px-2 py-0.5 rounded-full">{formatPinRemaining(item.pinned_until)}</span>}
                     </div>
                   </div>
 
@@ -1040,7 +1182,10 @@ export default function Home() {
                   </div>
                 ) : (
                   item.status !== 'completed' && (
-                    <div className="flex justify-end">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button onClick={() => handleToggleReservation(item)} className={`font-bold text-[10px] px-3 py-1.5 rounded-lg shadow-sm ${reservationInfo.mine ? 'bg-violet-50 text-violet-700 border border-violet-100' : 'bg-violet-600 text-white'}`}>
+                        {reservationInfo.mine ? '予約取消' : '予約する'}
+                      </button>
                       <button onClick={() => {
                         const fp = `twoway_${[profile.userId, item.user_id].sort().join('_')}_${item.give_details}_${item.want_details}`.toLowerCase().trim();
                         handleOpenChat(item, fp, [profile.userId, item.user_id]);

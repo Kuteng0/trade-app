@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { sendLineNotification } from '@/lib/line';
 import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
@@ -39,14 +40,7 @@ export async function POST(request: Request) {
 
     const messageText = '【トレマチ】条件に合う交換候補が見つかりました。\nアプリを開いてマッチング内容を確認してください。';
     const results = await Promise.allSettled(
-      uniqueUserIds.map((to) => fetch('https://api.line.me/v2/bot/message/push', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${lineToken}`,
-        },
-        body: JSON.stringify({ to, messages: [{ type: 'text', text: messageText }] }),
-      })),
+      uniqueUserIds.map((to) => sendLineNotification(to, messageText)),
     );
 
     const failed = results.filter((result) => result.status === 'rejected' || (result.status === 'fulfilled' && !result.value.ok)).length;
