@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/admin/cleanup-orphan-item-images",
+      "schedule": "0 18 * * *"
+    }
+  ]
+}
