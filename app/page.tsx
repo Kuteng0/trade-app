@@ -151,6 +151,62 @@ export default function Home() {
   const [roomExtraMap, setRoomExtraMap] = useState<Record<string, { lastTime: string; id: string }>>({});
   const [pinActionItem, setPinActionItem] = useState<(TradeItemSummary & { id: string }) | null>(null);
 
+
+  const premiumBenefits = [
+    'AI 3方巡回マッチング無制限',
+    '3人専用チャットルーム利用',
+    '交換情報の優先表示',
+    '匿名安全取引室（画像アップロード対応）',
+    '交換予約',
+    '条件自動追跡通知',
+    'LINE通知',
+    'プレミアム限定機能の先行利用',
+    '今後追加される特典への優先アクセス',
+  ];
+
+  const plannedPremiumFeatures = [
+    '匿名安全取引室（画像アップロード対応）',
+    '交換予約',
+    '条件自動追跡通知',
+    'LINE通知',
+  ];
+
+  const pinOptions = [
+    { value: 0, label: '固定なし（1枚）', hours: 0, cost: 1 },
+    { value: 24, label: '24時間置トップ（5枚）', hours: 24, cost: 5 },
+    { value: 48, label: '48時間置トップ（8枚）', hours: 48, cost: 8 },
+    { value: 72, label: '72時間置トップ（10枚）', hours: 72, cost: 10 },
+  ];
+
+  const pinExtensionOptions = [
+    { hours: 24, label: '24時間延長（5枚）', cost: 5 },
+    { hours: 48, label: '48時間延長（8枚）', cost: 8 },
+    { hours: 72, label: '72時間延長（10枚）', cost: 10 },
+  ];
+
+  const getSupabaseStoragePath = (imageUrl: string | null | undefined) => {
+    if (!imageUrl) return null;
+    const marker = '/item-images/';
+    const markerIndex = imageUrl.indexOf(marker);
+    if (markerIndex === -1) return null;
+    return decodeURIComponent(imageUrl.slice(markerIndex + marker.length).split('?')[0]);
+  };
+
+  const getDisplayName = (item: TradeItemSummary, fallback: string) => item.users?.display_name || fallback;
+
+  const getThreeWayRouteLines = (room: ChatRoomWithRoute | null) => {
+    const route = room?.currentRoute;
+    if (!route?.itemA || !route?.itemB || !route?.itemC) return [];
+    const nameA = getDisplayName(route.itemA, 'ユーザー1');
+    const nameB = getDisplayName(route.itemB, 'ユーザー2');
+    const nameC = getDisplayName(route.itemC, 'ユーザー3');
+    return [
+      `${nameA}さんの「${route.itemA.give_details}」→ ${nameB}さんへ`,
+      `${nameB}さんの「${route.itemB.give_details}」→ ${nameC}さんへ`,
+      `${nameC}さんの「${route.itemC.give_details}」→ ${nameA}さんへ`,
+    ];
+  };
+
   // 相対時間計算ヘルパー
   const formatJapaneseTime = (dateString: string | null | undefined) => {
     if (!dateString) return 'なし';
@@ -860,7 +916,7 @@ export default function Home() {
           <div>
             <span className="text-xs font-bold block">{profile?.displayName || 'ユーザー'} さん</span>
             <span className="text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-              {isPremium ? '💎 プレミアム会員' : '🔰 一般会員（2方表示限定）'}
+              {isPremium ? '💎 プレミアム会員 / 3方巡回マッチング・優先表示 有効' : '🔰 一般会員（2方表示限定）'}
             </span>
           </div>
         </div>
