@@ -860,7 +860,7 @@ export default function Home() {
           <div>
             <span className="text-xs font-bold block">{profile?.displayName || 'ユーザー'} さん</span>
             <span className="text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-              {isPremium ? '💎 プレミアム会員' : '🔰 一般会員（2方表示限定）'}
+              {isPremium ? '💎 プレミアム会員 / 3方巡回マッチング・優先表示 有効' : '🔰 一般会員（2方表示限定）'}
             </span>
           </div>
         </div>
