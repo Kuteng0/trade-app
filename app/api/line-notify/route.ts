@@ -33,7 +33,8 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'LINE通知の送信中にエラーが発生しました。';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
