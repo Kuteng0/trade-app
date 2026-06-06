@@ -8,20 +8,20 @@ type TradeItemSummary = {
   user_id?: string;
   image_url?: string | null;
   pinned_until?: string | null;
+  is_pinned?: boolean;
+  status?: string;
+  title?: string;
   give_details?: string;
   want_details?: string;
   users?: { display_name?: string | null } | null;
 };
 
-type ThreeWayRoute = {
+type MatchRoute = {
   itemA: TradeItemSummary;
   itemB: TradeItemSummary;
-  itemC: TradeItemSummary;
+  itemC?: TradeItemSummary;
 };
 
-type ChatRoomWithRoute = {
-  currentRoute?: ThreeWayRoute;
-};
 
 export default function Home() {
   // ----------------------------------------------------
@@ -67,6 +67,11 @@ export default function Home() {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [newMessageText, setNewMessageText] = useState('');
   const [chatImageSubmitting, setChatImageSubmitting] = useState(false);
+  const [showReservationForm, setShowReservationForm] = useState(false);
+  const [reservationScheduledAt, setReservationScheduledAt] = useState('');
+  const [reservationLocation, setReservationLocation] = useState('');
+  const [reservationMemo, setReservationMemo] = useState('');
+  const [reservationSubmitting, setReservationSubmitting] = useState(false);
 
   // ----------------------------------------------------
   // 6. マッチング看板＆リアルタイムキャッシュ
@@ -74,6 +79,52 @@ export default function Home() {
   const [twoWayMatches, setTwoWayMatches] = useState<any[]>([]);
   const [threeWayMatches, setThreeWayMatches] = useState<any[]>([]);
   const [roomExtraMap, setRoomExtraMap] = useState<Record<string, { lastTime: string; id: string }>>({});
+  const [pinActionItem, setPinActionItem] = useState<(TradeItemSummary & { id: string }) | null>(null);
+
+  const pinOptions = [
+    { value: 0, label: '固定なし（1枚）', hours: 0, cost: 1 },
+    { value: 24, label: '24時間置トップ（5枚）', hours: 24, cost: 5 },
+    { value: 48, label: '48時間置トップ（8枚）', hours: 48, cost: 8 },
+    { value: 72, label: '72時間置トップ（10枚）', hours: 72, cost: 10 },
+  ];
+
+  const pinActionOptions = [
+    { hours: 24, label: '24時間（5枚）', cost: 5 },
+    { hours: 48, label: '48時間（8枚）', cost: 8 },
+    { hours: 72, label: '72時間（10枚）', cost: 10 },
+  ];
+
+  const getSupabaseStoragePath = (imageUrl: string | null | undefined) => {
+    if (!imageUrl) return null;
+    const marker = '/item-images/';
+    const markerIndex = imageUrl.indexOf(marker);
+    if (markerIndex === -1) return null;
+    return decodeURIComponent(imageUrl.slice(markerIndex + marker.length).split('?')[0]);
+  };
+
+  const getDisplayName = (item: TradeItemSummary, fallback: string) => item.users?.display_name || fallback;
+
+  const getRouteLines = (route: MatchRoute | undefined) => {
+    if (!route?.itemA || !route?.itemB) return [];
+    const nameA = getDisplayName(route.itemA, 'ユーザー1');
+    const nameB = getDisplayName(route.itemB, 'ユーザー2');
+
+    if (!route.itemC) {
+      return [
+        `${nameA}さんの「${route.itemA.give_details}」→ ${nameB}さんへ`,
+        `${nameB}さんの「${route.itemB.give_details}」→ ${nameA}さんへ`,
+      ];
+    }
+
+    const nameC = getDisplayName(route.itemC, 'ユーザー3');
+    return [
+      `${nameA}さんの「${route.itemA.give_details}」→ ${nameB}さんへ`,
+      `${nameB}さんの「${route.itemB.give_details}」→ ${nameC}さんへ`,
+      `${nameC}さんの「${route.itemC.give_details}」→ ${nameA}さんへ`,
+    ];
+  };
+
+  const getPinActionLabel = (item: TradeItemSummary) => (item.is_pinned || item.pinned_until ? '置トップ延長' : '置トップ');
 
 
   const premiumBenefits = [
@@ -155,6 +206,18 @@ export default function Home() {
     }
   };
 
+  const notifyMatchOnce = async (fingerprint: string, userIds: string[], matchType: 'two-way' | 'three-way') => {
+    try {
+      await fetch('/api/match-notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fingerprint, userIds, matchType }),
+      });
+    } catch (error) {
+      console.error('マッチ通知の送信に失敗しました:', error);
+    }
+  };
+
   // ----------------------------------------------------
   // 🎯 マッチング計算 ＆ LINE自動通知エンジン
   // ----------------------------------------------------
@@ -179,20 +242,15 @@ export default function Home() {
           if (!computedTwoWay.some(m => m.fingerprint === fingerprint)) {
             const matchObj = {
               fingerprint,
-              routeText: `🤝 2方マッチ成立: 【${itemA.title || 'グッズ'}】の[${itemA.give_details}] ➔ ⇆ ➔ 【${itemB.title || 'グッズ'}】の[${itemB.give_details}]`,
+              routeText: `${getDisplayName(itemA, 'ユーザー1')}さんの「${itemA.give_details}」→ ⇆ → ${getDisplayName(itemB, 'ユーザー2')}さんの「${itemB.give_details}」`,
               itemA,
               itemB,
               participants: Array.from(new Set([itemA.user_id, itemB.user_id]))
             };
             computedTwoWay.push(matchObj);
 
-            // 新規登録時のリアルタイムLINE通知ロジック (他ユーザーへの通知)
             if (shouldNotifyNewMatch) {
-              if (itemA.user_id === currentUserId && itemB.user_id !== currentUserId) {
-                sendLineNotification(itemB.user_id, `【Create Next App】🤝 トレードマッチング成立！\nあなたが探している「${itemB.want_details}」を持つユーザーが現れました！アプリを開いて匿名チャットを確認しましょう。`);
-              } else if (itemB.user_id === currentUserId && itemA.user_id !== currentUserId) {
-                sendLineNotification(itemA.user_id, `【Create Next App】🤝 トレードマッチング成立！\nあなたが探している「${itemA.want_details}」を持つユーザーが現れました！アプリを開いて匿名チャットを確認しましょう。`);
-              }
+              notifyMatchOnce(fingerprint, [itemA.user_id, itemB.user_id], 'two-way');
             }
           }
         }
@@ -235,10 +293,7 @@ export default function Home() {
               });
 
               if (shouldNotifyNewMatch) {
-                const targetUsers = [itemA.user_id, itemB.user_id, itemC.user_id].filter(id => id !== currentUserId);
-                targetUsers.forEach(userId => {
-                  sendLineNotification(userId, `【Create Next App】✨ 3方巡回トレードが成立しました！\nわらしべ長者方式の3人循環ルートが完成しました！アプリを開いて今すぐルートを確認しましょう。`);
-                });
+                notifyMatchOnce(fingerprint, [itemA.user_id, itemB.user_id, itemC.user_id], 'three-way');
               }
             }
           }
@@ -344,7 +399,7 @@ export default function Home() {
   // ----------------------------------------------------
   // チャットアクション
   // ----------------------------------------------------
-  const handleOpenChat = async (targetItem: any, fingerprint: string, participants: string[], currentRoute?: ThreeWayRoute) => {
+  const handleOpenChat = async (targetItem: any, fingerprint: string, participants: string[], currentRoute?: MatchRoute) => {
     let { data: room } = await supabase
       .from('anonymous_chats')
       .select('*')
@@ -367,8 +422,17 @@ export default function Home() {
     }
 
     if (room) {
-      setActiveChatRoom({ ...room, currentTargetItem: targetItem, currentRoute });
+      const { data: reservation } = await supabase
+        .from('exchange_reservations')
+        .select('*')
+        .eq('chat_room_id', room.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      setActiveChatRoom({ ...room, currentTargetItem: targetItem, currentRoute, reservation });
       setChatMessages(room.messages || []);
+      setShowReservationForm(false);
     }
   };
 
@@ -396,7 +460,7 @@ export default function Home() {
 
     const partnerId = activeChatRoom.user_ids?.find((id: string) => id !== profile.userId);
     if (partnerId) {
-      sendLineNotification(partnerId, `【Create Next App】💬 新着メッセージ通知\n匿名チャットルームで「${profile.displayName}」さんから新着メッセージが届きました。`);
+      sendLineNotification(partnerId, `【トレマチ】💬 新着メッセージ通知\n匿名チャットルームで「${profile.displayName}」さんから新着メッセージが届きました。`);
     }
 
     setNewMessageText('');
@@ -435,12 +499,55 @@ export default function Home() {
 
       const partnerId = activeChatRoom.user_ids?.find((id: string) => id !== profile.userId);
       if (partnerId) {
-        sendLineNotification(partnerId, `【Create Next App】📷 画像メッセージ通知\n匿名チャットルームに新しい画像が届きました。`);
+        sendLineNotification(partnerId, `【トレマチ】📷 画像メッセージ通知\n匿名チャットルームに新しい画像が届きました。`);
       }
     } catch {
       alert('画像のアップロードに失敗しました。');
     } finally {
       setChatImageSubmitting(false);
+    }
+  };
+
+
+  const handleCreateReservation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeChatRoom?.id) return;
+    if (!reservationScheduledAt || !reservationLocation.trim()) {
+      alert('予定日時と場所 / 方法を入力してください。');
+      return;
+    }
+
+    setReservationSubmitting(true);
+    try {
+      const { data, error } = await supabase
+        .from('exchange_reservations')
+        .insert({
+          chat_room_id: activeChatRoom.id,
+          item_id: activeChatRoom.item_id || activeChatRoom.currentTargetItem?.id || null,
+          created_by: profile.userId,
+          participant_ids: activeChatRoom.user_ids || [],
+          scheduled_at: new Date(reservationScheduledAt).toISOString(),
+          location: reservationLocation.trim(),
+          memo: reservationMemo.trim(),
+        })
+        .select()
+        .single();
+
+      if (error) {
+        alert('交換予約の作成に失敗しました。入力内容を確認して再度お試しください。');
+        return;
+      }
+
+      setActiveChatRoom({ ...activeChatRoom, reservation: data });
+      setShowReservationForm(false);
+      setReservationScheduledAt('');
+      setReservationLocation('');
+      setReservationMemo('');
+      alert('交換予約を作成しました。');
+    } catch {
+      alert('交換予約の作成中にエラーが発生しました。時間をおいて再度お試しください。');
+    } finally {
+      setReservationSubmitting(false);
     }
   };
 
@@ -476,12 +583,13 @@ export default function Home() {
 
   const handleExtendPin = async (item: TradeItemSummary & { id: string }, hours: number, cost: number) => {
     if (!profile?.userId || item.user_id !== profile.userId) return;
+    const actionLabel = getPinActionLabel(item);
     if (userCoins < cost) {
       alert(`コインが不足しています。${hours}時間延長には${cost}枚必要です。`);
       return;
     }
 
-    if (!window.confirm(`置トップを${hours}時間延長します。コイン${cost}枚を使用しますか？`)) return;
+    if (!window.confirm(`${actionLabel}を${hours}時間で設定します。コイン${cost}枚を使用しますか？`)) return;
 
     const currentPinnedUntil = item.pinned_until ? new Date(item.pinned_until).getTime() : 0;
     const nowTime = new Date().getTime();
@@ -502,12 +610,13 @@ export default function Home() {
 
     if (itemError) {
       await supabase.from('users').update({ coins: userCoins }).eq('line_id', profile.userId);
-      alert('置トップ延長に失敗しました。コイン消費を取り消しました。');
+      alert(`${actionLabel}に失敗しました。コイン消費を取り消しました。`);
       return;
     }
 
     setUserCoins(nextCoins);
-    alert(`置トップを${hours}時間延長しました。`);
+    setPinActionItem(null);
+    alert(`${actionLabel}を${hours}時間で設定しました。`);
     fetchItems(profile.userId, false);
   };
 
@@ -558,7 +667,7 @@ export default function Home() {
   };
 
   const handleBuyPremium = async () => {
-    const details = `トレマチ プレミアム（月額680円）\n\n推し活グッズ交換をもっと便利に。\n\n✅ AI 3方巡回マッチング無制限\n✅ 3人専用チャットルーム利用\n✅ 交換情報の優先表示\n✅ 匿名安全取引室（画像アップロード対応）\n✅ 交換予約\n✅ 条件自動追跡通知\n✅ LINE通知\n✅ プレミアム限定機能の先行利用\n✅ 今後追加される特典への優先アクセス\n\nさらに初回登録時にコイン50枚プレゼント。\n\nいつでも解約可能。\n\nStripe決済で登録しますか？`;
+    const details = `トレマチ プレミアム（月額680円）\n\n推し活グッズ交換をもっと便利に。\n\n✅ AI 3方巡回マッチング無制限\n✅ 3人専用チャットルーム利用\n✅ 交換予約\n✅ 条件自動追跡通知\n✅ LINE通知\n\nさらに初回登録時にコイン50枚プレゼント。\n\nいつでも解約可能。\n\nStripe決済で登録しますか？`;
     await startStripeCheckout('premium', details);
   };
 
@@ -622,7 +731,24 @@ export default function Home() {
         return;
       }
 
-      alert('フィードバックを送信しました。ご協力ありがとうございました！');
+      const createdAt = new Date().toISOString();
+      const notifyResponse = await fetch('/api/line-feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: feedbackCategory,
+          content: feedbackContent,
+          senderName: profile?.displayName,
+          senderLineId: profile?.userId,
+          createdAt,
+        }),
+      });
+
+      if (!notifyResponse.ok) {
+        alert('フィードバックは保存されましたが、管理者へのLINE通知に失敗しました。');
+      } else {
+        alert('フィードバックを送信しました。ご協力ありがとうございました！');
+      }
       setFeedbackContent('');
     } catch {
       alert('フィードバックの送信中にエラーが発生しました。時間をおいて再度お試しください。');
@@ -654,6 +780,27 @@ export default function Home() {
         </div>
       )}
 
+      {pinActionItem && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-end justify-center" onClick={() => setPinActionItem(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-4 space-y-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-black text-slate-900">{getPinActionLabel(pinActionItem)}</p>
+                <p className="text-[11px] text-gray-500">延長時間を選択してください。長い時間ほどお得です。</p>
+              </div>
+              <button onClick={() => setPinActionItem(null)} className="text-gray-400 font-black px-2">✕</button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {pinActionOptions.map((option) => (
+                <button key={option.hours} onClick={() => handleExtendPin(pinActionItem, option.hours, option.cost)} className="bg-amber-50 text-amber-800 border border-amber-100 rounded-2xl p-3 text-xs font-black">
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 🎬 匿名チャットルームモーダル */}
       {activeChatRoom && (
         <div className="fixed inset-0 bg-slate-900/70 z-40 flex items-end justify-center">
@@ -668,7 +815,7 @@ export default function Home() {
               <p className="font-extrabold text-amber-400 text-[10px]">📌 現在の交換ターゲット条件（常時上部に固定）</p>
               {activeChatRoom.currentRoute ? (
                 <div className="bg-slate-800 p-2 rounded-xl space-y-1.5">
-                  {getThreeWayRouteLines(activeChatRoom).map((line, idx) => (
+                  {getRouteLines(activeChatRoom.currentRoute).map((line, idx) => (
                     <p key={idx} className="break-words leading-relaxed">{line}</p>
                   ))}
                 </div>
@@ -677,6 +824,35 @@ export default function Home() {
                   <p className="truncate"><span className="bg-red-500 text-white text-[8px] px-1.5 py-0.5 rounded mr-1.5 font-bold">譲</span> {activeChatRoom.currentTargetItem?.give_details}</p>
                   <p className="truncate"><span className="bg-blue-500 text-white text-[8px] px-1.5 py-0.5 rounded mr-1.5 font-bold">求</span> {activeChatRoom.currentTargetItem?.want_details}</p>
                 </div>
+              )}
+            </div>
+
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-[11px] font-black text-emerald-800">交換予約</p>
+                  {activeChatRoom.reservation ? (
+                    <p className="text-[10px] text-emerald-700 mt-1">
+                      {activeChatRoom.reservation.scheduled_at ? new Date(activeChatRoom.reservation.scheduled_at).toLocaleString('ja-JP') : '日時未設定'} / {activeChatRoom.reservation.location || '場所未設定'}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-emerald-700 mt-1">予定日時・場所 / 方法を共有できます。</p>
+                  )}
+                </div>
+                <button onClick={() => setShowReservationForm(!showReservationForm)} className="bg-emerald-600 text-white text-[10px] font-black px-3 py-1.5 rounded-xl">
+                  交換予約を作成
+                </button>
+              </div>
+              {activeChatRoom.reservation?.memo && <p className="text-[10px] text-emerald-700 bg-white/70 rounded-xl p-2">メモ：{activeChatRoom.reservation.memo}</p>}
+              {showReservationForm && (
+                <form onSubmit={handleCreateReservation} className="space-y-2 bg-white/80 p-2 rounded-2xl">
+                  <input type="datetime-local" value={reservationScheduledAt} onChange={(e) => setReservationScheduledAt(e.target.value)} className="w-full text-base px-3 py-2 bg-white border border-emerald-100 rounded-xl" />
+                  <input type="text" placeholder="場所 / 方法" value={reservationLocation} onChange={(e) => setReservationLocation(e.target.value)} className="w-full text-base px-3 py-2 bg-white border border-emerald-100 rounded-xl" />
+                  <textarea rows={2} placeholder="メモ" value={reservationMemo} onChange={(e) => setReservationMemo(e.target.value)} className="w-full text-base px-3 py-2 bg-white border border-emerald-100 rounded-xl" />
+                  <button type="submit" disabled={reservationSubmitting} className="w-full bg-emerald-700 text-white text-xs font-black py-2 rounded-xl disabled:opacity-60">
+                    {reservationSubmitting ? '作成中...' : '予約を保存する'}
+                  </button>
+                </form>
               )}
             </div>
 
@@ -743,35 +919,14 @@ export default function Home() {
             <button onClick={() => handleChargeCoins('coin35', 35)} disabled={checkoutLoadingProduct !== null} className="bg-white border-2 border-teal-500 rounded-xl p-2 text-center text-xs font-bold text-teal-600 disabled:opacity-60">コイン35枚 / ¥300</button>
             <button onClick={() => handleChargeCoins('coin60', 60)} disabled={checkoutLoadingProduct !== null} className="bg-white border rounded-xl p-2 text-center text-xs font-bold disabled:opacity-60">コイン60枚 / ¥500</button>
           </div>
-          <button onClick={handleWatchAd} disabled={dailyAds >= 3} className="w-full bg-slate-900 text-white p-2 text-center rounded-xl text-[10px] font-bold">
-            📺 動画広告視聴で1枚無料獲得 (本日残り: {3 - dailyAds}回)
-          </button>
         </div>
       )}
 
-      <div className={`rounded-3xl p-4 mb-4 border shadow-sm ${isPremium ? 'bg-gradient-to-br from-purple-50 to-indigo-50 border-purple-100' : 'bg-white border-gray-100'}`}>
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div>
-            <p className="text-sm font-black text-slate-900">トレマチ プレミアム（月額680円）</p>
-            <p className="text-xs text-gray-500 mt-1">推し活グッズ交換をもっと便利に。</p>
-            {isPremium && <p className="text-[11px] text-purple-700 font-black mt-1">💎 プレミアム会員 / 3方巡回マッチング・優先表示 有効</p>}
-          </div>
-          <span className={`text-[10px] font-black px-2 py-1 rounded-full ${isPremium ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{isPremium ? '有効' : 'LOCKED'}</span>
-        </div>
-        <div className="grid grid-cols-1 gap-1.5">
-          {premiumBenefits.map((benefit) => (
-            <div key={benefit} className="flex items-center justify-between gap-2 bg-white/70 rounded-xl px-3 py-2 border border-white text-[11px]">
-              <span className="font-bold text-gray-700">✅ {benefit}</span>
-              {plannedPremiumFeatures.includes(benefit) && <span className="shrink-0 bg-amber-100 text-amber-700 text-[9px] font-black px-2 py-0.5 rounded-full">近日対応予定</span>}
-            </div>
-          ))}
-        </div>
-        <p className="text-[11px] text-purple-700 font-bold mt-3">さらに初回登録時にコイン50枚プレゼント。いつでも解約可能。</p>
-        {!isPremium && (
-          <button onClick={handleBuyPremium} disabled={checkoutLoadingProduct !== null} className="mt-3 w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-black py-3 rounded-2xl shadow-md disabled:opacity-60">
-            {checkoutLoadingProduct === 'premium' ? 'Stripeへ移動中...' : '👑 月額680円でプレミアム登録'}
-          </button>
-        )}
+      <div className="bg-white rounded-3xl p-4 mb-4 border border-sky-100 shadow-sm">
+        <button onClick={handleWatchAd} disabled={dailyAds >= 3} className="w-full bg-gradient-to-r from-sky-500 to-cyan-500 text-white p-3 text-center rounded-2xl text-xs font-black shadow-sm disabled:from-gray-300 disabled:to-gray-300 disabled:text-gray-500">
+          📺 動画広告視聴でコイン1枚無料獲得
+          <span className="block text-[11px] mt-1">本日残り：{Math.max(0, 3 - dailyAds)}回</span>
+        </button>
       </div>
 
       {/* ⚡ マッチングウィンドウ（双方向・三方向） */}
@@ -789,7 +944,7 @@ export default function Home() {
                       <span className="text-[9px] text-teal-300 font-medium">
                         🕒 チャット更新: {formatJapaneseTime(roomInfo?.lastTime)}
                       </span>
-                      <button onClick={() => handleOpenChat(m.itemA, m.fingerprint, m.participants)} className="bg-teal-500 hover:bg-teal-600 text-white font-black text-[9px] px-3 py-1 rounded-md">
+                      <button onClick={() => handleOpenChat(m.itemA, m.fingerprint, m.participants, { itemA: m.itemA, itemB: m.itemB })} className="bg-teal-500 hover:bg-teal-600 text-white font-black text-[9px] px-3 py-1 rounded-md">
                         チャット室に入る 💬
                       </button>
                     </div>
@@ -813,7 +968,7 @@ export default function Home() {
                   const roomInfo = roomExtraMap[m.fingerprint];
                   return (
                     <div key={m.fingerprint} className="bg-white/10 rounded-xl p-2.5 flex flex-col space-y-2 border border-white/5">
-                      <div className="text-[10px] text-amber-200 font-medium break-all leading-relaxed space-y-1">{[`${getDisplayName(m.itemA, 'ユーザー1')}さんの「${m.itemA.give_details}」→ ${getDisplayName(m.itemB, 'ユーザー2')}さんへ`, `${getDisplayName(m.itemB, 'ユーザー2')}さんの「${m.itemB.give_details}」→ ${getDisplayName(m.itemC, 'ユーザー3')}さんへ`, `${getDisplayName(m.itemC, 'ユーザー3')}さんの「${m.itemC.give_details}」→ ${getDisplayName(m.itemA, 'ユーザー1')}さんへ`].map((line) => <p key={line}>{line}</p>)}</div>
+                      <div className="text-[10px] text-amber-200 font-medium break-all leading-relaxed space-y-1">{getRouteLines({ itemA: m.itemA, itemB: m.itemB, itemC: m.itemC }).map((line) => <p key={line}>{line}</p>)}</div>
                       <div className="flex justify-between items-center pt-1.5 border-t border-white/10">
                         <span className="text-[9px] text-indigo-300 font-medium">
                           🕒 最終更新: {formatJapaneseTime(roomInfo?.lastTime)}
@@ -904,13 +1059,10 @@ export default function Home() {
               <div className="flex flex-col gap-2 pt-3 mt-3 border-t border-gray-100">
                 {isOwner ? (
                   <>
-                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                      <span className="text-[10px] font-black text-amber-700 shrink-0">置トップ延長</span>
-                      {pinExtensionOptions.map((option) => (
-                        <button key={option.hours} onClick={() => handleExtendPin(item, option.hours, option.cost)} className="bg-amber-50 text-amber-700 text-[10px] font-bold px-2 py-1 rounded-lg border border-amber-100 shrink-0">
-                          {option.label}
-                        </button>
-                      ))}
+                    <div className="flex justify-end">
+                      <button onClick={() => setPinActionItem(item)} className="bg-amber-50 text-amber-700 text-[10px] font-bold px-3 py-1.5 rounded-lg border border-amber-100">
+                        {getPinActionLabel(item)}
+                      </button>
                     </div>
                     <div className="flex justify-end gap-1.5">
                       <button onClick={() => handleMarkCompleted(item.id, item.status)} className="bg-white border border-gray-300 text-gray-700 text-[10px] font-bold px-3 py-1.5 rounded-lg">
